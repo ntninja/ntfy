@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/urfave/cli/v2"
 	"github.com/urfave/cli/v2/altsrc"
+	"path/filepath"
 	"gopkg.in/yaml.v2"
 	"heckel.io/ntfy/v2/util"
 	"os"
@@ -73,13 +74,13 @@ func newYamlSourceFromFile(path string, flags []cli.Flag) (altsrc.InputSourceCon
 	// Process includes
 	if includeOpt, ok := rawConfig["include"]; ok {
 		// Extract `string` or `[]string`, erroring on wrong types
-		var paths []string
-		if path, ok := includeOpt.(string); ok {
-			paths = append(paths, path)
-		} else if maybePaths, ok := includeOpt.([]any); ok {
-			for _, maybePath := range maybePaths {
-				if path, ok := maybePath.(string); ok {
-					paths = append(paths, path)
+		var subpaths []string
+		if subpath, ok := includeOpt.(string); ok {
+			subpaths = append(subpaths, subpath)
+		} else if maybeSubpaths, ok := includeOpt.([]any); ok {
+			for _, maybeSubpath := range maybeSubpaths {
+				if subpath, ok := maybeSubpath.(string); ok {
+					subpaths = append(subpaths, subpath)
 				} else {
 					return nil, errors.New("config item “include” must be of type `string` or `[]string`")
 				}
@@ -91,8 +92,13 @@ func newYamlSourceFromFile(path string, flags []cli.Flag) (altsrc.InputSourceCon
 		// Process YAML file at each path, so that each at the end `rawConfig`
 		// will contain values from the last YAML file with highest precedence
 		// and from the originally referenced file with lowest precedence
-		for _, path := range paths {
-			if err := parseSingleYamlFile(rawConfig, path, flags); err != nil {
+		for _, subpath := range subpaths {
+			// Make included paths relative to configuration file
+			if !filepath.IsAbs(subpath) {
+				subpath = filepath.Join(filepath.Dir(path), subpath)
+			}
+
+			if err := parseSingleYamlFile(rawConfig, subpath, flags); err != nil {
 				return nil, err
 			}
 		}
