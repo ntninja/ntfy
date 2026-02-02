@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"github.com/urfave/cli/v2"
 	"github.com/urfave/cli/v2/altsrc"
@@ -35,19 +36,17 @@ func initConfigFileInputSourceFunc(configFlag string, flags []cli.Flag, next cli
 	}
 }
 
-// newYamlSourceFromFile creates a new Yaml InputSourceContext from a filepath.
-//
-// This function also maps aliases, so a .yml file can contain short options, or options with underscores
-// instead of dashes. See https://github.com/binwiederhier/ntfy/issues/255.
-func newYamlSourceFromFile(file string, flags []cli.Flag) (altsrc.InputSourceContext, error) {
-	var rawConfig map[any]any
-	b, err := os.ReadFile(file)
+func parseSingleYamlFile(rawConfig map[any]any, path string, flags []cli.Flag) error {
+	// Parse values from files
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := yaml.Unmarshal(b, &rawConfig); err != nil {
-		return nil, err
+	if err := yaml.Unmarshal(b, rawConfig); err != nil {
+		return err
 	}
+
+	// Resolve alias values based on flag configuration
 	for _, f := range flags {
 		flagName := f.Names()[0]
 		for _, flagAlias := range f.Names()[1:] {
@@ -56,5 +55,50 @@ func newYamlSourceFromFile(file string, flags []cli.Flag) (altsrc.InputSourceCon
 			}
 		}
 	}
-	return altsrc.NewMapInputSource(file, rawConfig), nil
+
+	return nil
+}
+
+// newYamlSourceFromFile creates a new Yaml InputSourceContext from a filepath.
+//
+// This function also maps aliases, so a .yml file can contain short options, or options with underscores
+// instead of dashes. See https://github.com/binwiederhier/ntfy/issues/255.
+func newYamlSourceFromFile(path string, flags []cli.Flag) (altsrc.InputSourceContext, error) {
+	// Parse original source file
+	rawConfig := make(map[any]any)
+	if err := parseSingleYamlFile(rawConfig, path, flags); err != nil {
+		return nil, err
+	}
+
+	// Process includes
+	if includeOpt, ok := rawConfig["include"]; ok {
+		// Extract `string` or `[]string`, erroring on wrong types
+		var paths []string
+		if path, ok := includeOpt.(string); ok {
+			paths = append(paths, path)
+		} else if maybePaths, ok := includeOpt.([]any); ok {
+			for _, maybePath := range maybePaths {
+				if path, ok := maybePath.(string); ok {
+					paths = append(paths, path)
+				} else {
+					return nil, errors.New("config item “include” must be of type `string` or `[]string`")
+				}
+			}
+		} else {
+			return nil, errors.New("config item “include” must be of type `string` or `[]string`")
+		}
+
+		// Process YAML file at each path, so that each at the end `rawConfig`
+		// will contain values from the last YAML file with highest precedence
+		// and from the originally referenced file with lowest precedence
+		for _, path := range paths {
+			if err := parseSingleYamlFile(rawConfig, path, flags); err != nil {
+				return nil, err
+			}
+		}
+
+		delete(rawConfig, "include")
+	}
+
+	return altsrc.NewMapInputSource(path, rawConfig), nil
 }
